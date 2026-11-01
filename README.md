@@ -1,81 +1,103 @@
-# octop-docker
+# Docker Hub Images
 
-Automated **multi-arch** Docker Hub images for
-[TencentCloud/Octop](https://github.com/TencentCloud/Octop). Target docker repo: [tozp/octop](https://hub.docker.com/r/tozp/octop).
-
-Upstream's official workflow only builds `linux/amd64`. This repo additionally
-builds `linux/arm64` and publishes to Docker Hub, so ARM devices (Raspberry Pi,
-ARM servers, Apple Silicon, ...) can run it directly.
-
-> Unofficial build: the image content is identical to upstream's
-> `docker/Dockerfile`; only the arm64 architecture is added.
-
-## Pull
-
-```bash
-docker pull <your-dockerhub-username>/octop:latest
-```
-
-A specific version:
-
-```bash
-docker pull <your-dockerhub-username>/octop:1.0.2
-```
-
-## Run
-
-```bash
-docker run -d \
-  --name octop \
-  -p 8088:8088 \
-  -v octop-data:/data/.octop \
-  -e HOME=/data \
-  <your-dockerhub-username>/octop:latest
-```
-
-Open `http://localhost:8088`. On first boot the container runs `octop init`
-automatically; if `OCTOP_DEFAULT_PASSWORD` is unset, a random password is
-generated and written to `/data/.octop/credential.txt`. See the
-[upstream docker docs](https://github.com/TencentCloud/Octop/tree/main/docker)
-for all environment variables.
-
-## Tags
-
-| Tag     | Description                          |
-| ------- | ------------------------------------ |
-| `latest`| Build of the latest upstream release |
-| `x.y.z` | Build of upstream tag `vx.y.z`       |
-
-## How it works
-
-1. Runs automatically on schedule every hour (at minute 20); can also be triggered manually anytime.
-2. Queries the latest upstream GitHub Release and compares it with the `LAST_BUILD`
-   file in this repo.
-3. Automatically builds when a new version is found: checks out upstream at that tag,
-   builds `linux/amd64,linux/arm64` with upstream's own `docker/Dockerfile`,
-   and pushes to Docker Hub.
-4. On success, writes the new version back to `LAST_BUILD` so subsequent hourly checks skip it.
+Configuration-driven, unofficial multi-architecture builds for
+[Octop](images/octop/docker.md) and [Hindsight](images/hindsight/docker.md).
+One hourly workflow discovers `images/*/build.yml`; each project independently
+checks its latest stable GitHub Release and publishes to Docker Hub.
 
 ## Setup
 
-1. Create an empty **public** repo `tozp/octop-docker` on GitHub and push these files.
-   (Public repos get unlimited free Actions minutes; a private repo's free quota
-   can be eaten up by the long multi-arch builds.)
-2. Docker Hub > Account Settings > Security > Personal access tokens > Generate
-   new token, with **Read & Write** permissions.
-3. GitHub repo > Settings > Secrets and variables > Actions > New repository secret:
-   - `DOCKERHUB_USERNAME` — your Docker Hub username (also the image namespace)
-   - `DOCKERHUB_TOKEN` — the access token from step 2
-4. Go to the Actions tab and trigger a manual run once to verify everything works.
+1. Enable GitHub Actions in this repository. Private repositories are supported;
+   GitHub-hosted runner usage counts against your plan's Actions allowance.
+2. Create the `octop` and `hindsight` repositories in your Docker Hub namespace.
+3. Configure Actions secrets:
+   - `DOCKERHUB_USERNAME`: Docker Hub username and destination namespace.
+   - `DOCKERHUB_TOKEN`: personal access token with Read & Write permissions.
+   - `DOCKERHUB_DESCRIPTION_TOKEN`: optional separate token with Read/Write/Delete
+     permissions, required by the description-sync action. If omitted, that
+     action uses `DOCKERHUB_TOKEN`, which then needs Read/Write/Delete permissions.
+4. The Docker Hub examples use `tozp`; update the two `docker.md` files if using
+   another namespace. Never put credentials in project configuration files.
+5. Run **Build multi-arch images** manually, specifying `octop` or `hindsight`.
 
-## Manual build
+The workflow requires only read access to GitHub repository contents. It does
+not commit versions, modify repository variables, or require branch push access.
 
-1. Open the repo page > **Actions** tab.
-2. Select **Build multi-arch images** in the left sidebar.
-3. Click **Run workflow** (top right).
-   - Leave `tag` empty to automatically fetch, build, and overwrite with the latest upstream release.
-   - Or optionally specify an older tag (e.g. `v1.0.2`) to rebuild that specific version.
-4. Click the green **Run workflow** button.
+## Updates
 
-Note: the arm64 leg builds under QEMU emulation, so a full multi-arch build can take tens of
-minutes when triggered. Hourly checks where no new release was published finish in seconds.
+At minute 20 of each hour, a dynamic matrix checks every configured project.
+A release is skipped only when its Docker Hub version tag contains every
+configured platform. Missing tags or architectures trigger a build. Registry
+authentication, rate-limit, and network errors fail the check instead of being
+treated as missing images. Failed builds retry at the next scheduled check.
+
+Successful builds publish a version tag without the leading `v`. Only the
+latest stable release also publishes `latest`. If the version already exists
+but `latest` differs, the workflow repairs `latest` without rebuilding.
+Docker Hub is the source of publication state; no local version records exist.
+
+Manual runs require a project directory name, not a fixed selection list.
+Leave `tag` empty for the latest stable release, or enter an upstream version
+such as `v1.0.2` or `1.0.2`. Manual runs always rebuild; older versions never
+change `latest`. A version without `v` is prefixed when upstream's latest tag
+uses that convention. Changes to build configuration under an existing version
+require a manual rebuild. Moved upstream tags are not automatically detected.
+
+Projects run independently with separate concurrency groups and cache scopes.
+ARM64 uses QEMU on GitHub's x86-64 runner; full builds can take significant time
+and disk space. Scheduled execution can be delayed by GitHub.
+
+## Project Configuration
+
+Each project directory contains only `build.yml` and `docker.md`. The build
+file uses Docker Buildx Bake's Compose format with one service named `image`:
+
+```yaml
+x-upstream: vectorize-io/hindsight
+
+services:
+   image:
+      image: ${DOCKERHUB_USERNAME:?Set DOCKERHUB_USERNAME}/hindsight:${VERSION:-check}
+      build:
+         context: ${UPSTREAM_CONTEXT:?Set absolute UPSTREAM_CONTEXT}
+         dockerfile: docker/standalone/Dockerfile
+         target: standalone
+         platforms:
+            - linux/amd64
+            - linux/arm64
+```
+
+`x-upstream` is the GitHub `owner/repository` for stable Releases. The shared
+script reads it using official [mikefarah/yq](https://github.com/mikefarah/yq)
+v4.45.4, with the Linux binary verified against a pinned SHA-256 checksum.
+Custom extensions are not expected in Bake's output.
+
+The service's `image` is the sole image-name declaration; `build.platforms` is
+the sole platform list. The checker reads both from `bake --print`. Standard
+Compose `build` fields support `context`, `dockerfile`, optional `target`, and
+`args`; build arguments are not for secrets. Octop omits `target` to use the
+upstream Dockerfile's default final stage.
+
+The workflow supplies `DOCKERHUB_USERNAME`, `UPSTREAM_CONTEXT` (the absolute
+upstream checkout directory), and `VERSION` (the selected tag without `v`).
+`VERSION` defaults to `check` when only reading metadata. Dockerfile paths are relative
+to the build context, not the project configuration directory. For subdirectory
+contexts, append the path to `${UPSTREAM_CONTEXT}` and adjust `dockerfile`.
+Checks and builds run from the repository root with the same environment.
+
+Add these two files to support another upstream Dockerfile build. Directory
+names use lowercase letters, digits, underscores, and hyphens. Give each
+project a distinct Docker Hub image name.
+
+## Docker Hub Descriptions
+
+Each `docker.md` is a standalone Docker Hub overview and may be pasted directly.
+The workflow also syncs it independently of build success or release changes,
+on scheduled/manual runs and pushes to `main` affecting project files or the
+workflow. Push-triggered runs sync descriptions only, without building images.
+Changing only a description does not require an image rebuild.
+
+Description synchronization uses
+[peter-evans/dockerhub-description](https://github.com/peter-evans/dockerhub-description).
+Its token permission requirement is separate from image pushing; a description
+failure does not cancel image builds.
