@@ -1,7 +1,9 @@
 # Docker Hub Images
 
 Configuration-driven, unofficial multi-architecture builds for
-[Octop](images/octop/docker.md) and [Hindsight](images/hindsight/docker.md).
+[Octop](images/octop/docker.md), [Hindsight](images/hindsight/docker.md), and
+DeerFlow ([Gateway](images/deer-flow-gateway/docker.md) and
+[frontend](images/deer-flow-frontend/docker.md)).
 One hourly workflow discovers `images/*/build.yml`; each project independently
 checks its latest stable GitHub Release and publishes to Docker Hub.
 
@@ -9,16 +11,19 @@ checks its latest stable GitHub Release and publishes to Docker Hub.
 
 1. Enable GitHub Actions in this repository. Private repositories are supported;
    GitHub-hosted runner usage counts against your plan's Actions allowance.
-2. Create the `octop` and `hindsight` repositories in your Docker Hub namespace.
+2. Create the `octop`, `hindsight`, `deer-flow-gateway`, and `deer-flow-frontend`
+   repositories in your Docker Hub namespace.
 3. Configure Actions secrets:
    - `DOCKERHUB_USERNAME`: Docker Hub username and destination namespace.
    - `DOCKERHUB_TOKEN`: personal access token with Read & Write permissions.
    - `DOCKERHUB_DESCRIPTION_TOKEN`: optional separate token with Read/Write/Delete
      permissions, required by the description-sync action. If omitted, that
      action uses `DOCKERHUB_TOKEN`, which then needs Read/Write/Delete permissions.
-4. The Docker Hub examples use `tozp`; update the two `docker.md` files if using
+4. The Docker Hub examples use `tozp`; update the `docker.md` files if using
    another namespace. Never put credentials in project configuration files.
-5. Run **Build multi-arch images** manually, specifying `octop` or `hindsight`.
+5. Run **Build multi-arch images** manually, specifying `octop`, `hindsight`,
+   `deer-flow-gateway`, or `deer-flow-frontend`. DeerFlow's two images build
+   independently; use matching version tags when deploying them together.
 
 The workflow requires only read access to GitHub repository contents. It does
 not commit versions, modify repository variables, or require branch push access.

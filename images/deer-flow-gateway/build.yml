@@ -1,0 +1,11 @@
+x-upstream: bytedance/deer-flow
+
+services:
+  image:
+    image: ${DOCKERHUB_USERNAME:?Set DOCKERHUB_USERNAME}/deer-flow-gateway:${VERSION:-check}
+    build:
+      context: ${UPSTREAM_CONTEXT:?Set absolute UPSTREAM_CONTEXT}
+      dockerfile: backend/Dockerfile
+      platforms:
+        - linux/amd64
+        - linux/arm64

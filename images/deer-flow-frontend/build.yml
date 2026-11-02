@@ -1,0 +1,12 @@
+x-upstream: bytedance/deer-flow
+
+services:
+  image:
+    image: ${DOCKERHUB_USERNAME:?Set DOCKERHUB_USERNAME}/deer-flow-frontend:${VERSION:-check}
+    build:
+      context: ${UPSTREAM_CONTEXT:?Set absolute UPSTREAM_CONTEXT}
+      dockerfile: frontend/Dockerfile
+      target: prod
+      platforms:
+        - linux/amd64
+        - linux/arm64
