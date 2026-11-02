@@ -36,10 +36,14 @@ services:
 
 This fragment is not a standalone Compose file. Follow upstream setup to
 prepare configuration and authentication secrets, including `BETTER_AUTH_SECRET`
-and the frontend environment file. Keep
-`DEER_FLOW_INTERNAL_GATEWAY_BASE_URL=http://gateway:8001` for the upstream
-service topology. The optional Kubernetes provisioner and sandbox images are
-not included in these builds.
+and the frontend environment file. API rewrites are built with
+`DEER_FLOW_INTERNAL_GATEWAY_BASE_URL=http://deer-flow-gateway:8001` via
+`.env.production.local`. The Gateway must be reachable as `deer-flow-gateway`
+on the frontend's Docker network; use that container name or add a network alias.
+Set the same environment variable at runtime for server-side authentication.
+Changing only the runtime variable does not change the built API rewrites.
+The optional Kubernetes provisioner and sandbox images are not included in
+these builds.
 
 The frontend listens on port `3000`. Access the application through the upstream
 nginx entrypoint on port `2026`, bound to loopback by default. Do not expose the

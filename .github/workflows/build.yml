@@ -126,6 +126,13 @@ jobs:
           path: upstream
           persist-credentials: false
 
+      - name: Configure DeerFlow frontend gateway
+        if: steps.check.outputs.should_build == 'true' && matrix.id == 'deer-flow-frontend'
+        run: |
+          printf '%s\n' \
+            'DEER_FLOW_INTERNAL_GATEWAY_BASE_URL=http://deer-flow-gateway:8001' \
+            > upstream/frontend/.env.production.local
+
       - name: Free runner disk space
         if: steps.check.outputs.should_build == 'true'
         run: |
