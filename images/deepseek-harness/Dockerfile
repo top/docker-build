@@ -3,6 +3,9 @@ FROM node:24-bookworm-slim AS builder
 
 WORKDIR /app
 
+ENV CI=true \
+    LEFTHOOK=0
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     make \
@@ -21,11 +24,17 @@ RUN if [ -f packages/client/connection/src/browser-auth.ts ]; then \
         packages/client/connection/src/browser-auth.ts; \
     fi
 
+# Clean dormant git worktree config if present to avoid hook conflicts
+RUN rm -f .git/config.worktree 2>/dev/null || true
+
 RUN pnpm install && pnpm run build
 
 FROM node:24-bookworm-slim AS runner
 
 WORKDIR /app
+
+ENV CI=true \
+    LEFTHOOK=0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash \
