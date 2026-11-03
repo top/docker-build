@@ -8,7 +8,14 @@ config="$1"
 
 upstream="$(yq -er '."x-upstream"' "$config")"
 [[ "$upstream" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
-latest="$(gh api "repos/$upstream/releases/latest" --jq .tag_name 2>/dev/null || gh api "repos/$upstream/releases" --jq '.[0].tag_name' 2>/dev/null || gh api "repos/$upstream/tags" --jq '.[0].name')"
+latest="$(gh api "repos/$upstream/releases/latest" --jq '.tag_name // empty' 2>/dev/null)" || latest=""
+if [[ -z "$latest" || "$latest" == "null" ]]; then
+  latest="$(gh api "repos/$upstream/releases" --jq '.[0].tag_name // empty' 2>/dev/null)" || latest=""
+fi
+if [[ -z "$latest" || "$latest" == "null" ]]; then
+  latest="$(gh api "repos/$upstream/tags" --jq '.[0].name // empty' 2>/dev/null)" || latest=""
+fi
+
 tag="${REQUESTED_TAG:-$latest}"
 tag_prefix="${latest%%[0-9]*}"
 if [[ -n "$tag_prefix" && "$tag" =~ ^[0-9] ]]; then
