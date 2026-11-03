@@ -8,13 +8,14 @@ config="$1"
 
 upstream="$(yq -er '."x-upstream"' "$config")"
 [[ "$upstream" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]
-latest="$(gh api "repos/$upstream/releases/latest" --jq .tag_name)"
+latest="$(gh api "repos/$upstream/releases/latest" --jq .tag_name 2>/dev/null || gh api "repos/$upstream/releases" --jq '.[0].tag_name' 2>/dev/null || gh api "repos/$upstream/tags" --jq '.[0].name')"
 tag="${REQUESTED_TAG:-$latest}"
-if [[ "$tag" =~ ^[0-9] && "$latest" == v* ]]; then
-  tag="v$tag"
+tag_prefix="${latest%%[0-9]*}"
+if [[ -n "$tag_prefix" && "$tag" =~ ^[0-9] ]]; then
+  tag="${tag_prefix}${tag}"
 fi
-version="${tag#v}"
-if [[ ! "$tag" =~ ^v?[0-9][A-Za-z0-9_.-]*$ || ${#version} -gt 128 ]]; then
+version="${tag#"${tag%%[0-9]*}"}"
+if [[ ! "$version" =~ ^[0-9][A-Za-z0-9_.-]*$ || ${#version} -gt 128 ]]; then
   echo "::error::Upstream tag is not a supported Docker version tag." >&2
   exit 1
 fi

@@ -126,6 +126,10 @@ jobs:
           path: upstream
           persist-credentials: false
 
+      - name: Copy project Dockerfile if present
+        if: steps.check.outputs.should_build == 'true' && hashFiles(format('images/{0}/Dockerfile', matrix.id)) != ''
+        run: cp "images/${{ matrix.id }}/Dockerfile" upstream/Dockerfile
+
       - name: Configure DeerFlow frontend gateway
         if: steps.check.outputs.should_build == 'true' && matrix.id == 'deer-flow-frontend'
         run: |

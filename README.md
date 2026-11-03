@@ -1,9 +1,10 @@
 # Docker Hub Images
 
 Configuration-driven, unofficial multi-architecture builds for
-[Octop](images/octop/docker.md), [Hindsight](images/hindsight/docker.md), and
+[Octop](images/octop/docker.md), [Hindsight](images/hindsight/docker.md),
 DeerFlow ([Gateway](images/deer-flow-gateway/docker.md) and
-[frontend](images/deer-flow-frontend/docker.md)).
+[frontend](images/deer-flow-frontend/docker.md)), and
+[DeepSeek Harness](images/deepseek-harness/docker.md).
 One hourly workflow discovers `images/*/build.yml`; each project independently
 checks its latest stable GitHub Release and publishes to Docker Hub.
 
@@ -11,8 +12,8 @@ checks its latest stable GitHub Release and publishes to Docker Hub.
 
 1. Enable GitHub Actions in this repository. Private repositories are supported;
    GitHub-hosted runner usage counts against your plan's Actions allowance.
-2. Create the `octop`, `hindsight`, `deer-flow-gateway`, and `deer-flow-frontend`
-   repositories in your Docker Hub namespace.
+2. Create the `octop`, `hindsight`, `deer-flow-gateway`, `deer-flow-frontend`,
+   and `deepseek-harness` repositories in your Docker Hub namespace.
 3. Configure Actions secrets:
    - `DOCKERHUB_USERNAME`: Docker Hub username and destination namespace.
    - `DOCKERHUB_TOKEN`: personal access token with Read & Write permissions.
