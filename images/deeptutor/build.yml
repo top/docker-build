@@ -1,0 +1,12 @@
+x-upstream: HKUDS/DeepTutor
+
+services:
+  image:
+    image: ${DOCKERHUB_USERNAME:?Set DOCKERHUB_USERNAME}/deeptutor:${VERSION:-check}
+    build:
+      context: ${UPSTREAM_CONTEXT:?Set absolute UPSTREAM_CONTEXT}
+      dockerfile: Dockerfile
+      target: production
+      platforms:
+        - linux/amd64
+        - linux/arm64
