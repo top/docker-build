@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       project:
-        description: "Project directory under images, e.g. octop or hindsight"
+        description: "Project directory under images, e.g. octop or deeptutor"
         required: true
         type: string
       tag:

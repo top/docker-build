@@ -7,10 +7,8 @@ Configuration-driven, unofficial multi-architecture builds for open-source AI an
 | Project Directory | Target Repository | Upstream | Overview |
 | --- | --- | --- | --- |
 | `octop` | `${DOCKERHUB_USERNAME}/octop` | [TencentCloud/Octop](https://github.com/TencentCloud/Octop) | [docker.md](images/octop/docker.md) |
-| `hindsight` | `${DOCKERHUB_USERNAME}/hindsight` | [vectorize-io/hindsight](https://github.com/vectorize-io/hindsight) | [docker.md](images/hindsight/docker.md) |
 | `deer-flow-gateway` | `${DOCKERHUB_USERNAME}/deer-flow-gateway` | [bytedance/deer-flow](https://github.com/bytedance/deer-flow) | [docker.md](images/deer-flow-gateway/docker.md) |
 | `deer-flow-frontend` | `${DOCKERHUB_USERNAME}/deer-flow-frontend` | [bytedance/deer-flow](https://github.com/bytedance/deer-flow) | [docker.md](images/deer-flow-frontend/docker.md) |
-| `deepseek-harness` | `${DOCKERHUB_USERNAME}/deepseek-harness` | [deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) | [docker.md](images/deepseek-harness/docker.md) |
 | `deeptutor` | `${DOCKERHUB_USERNAME}/deeptutor` | [HKUDS/DeepTutor](https://github.com/HKUDS/DeepTutor) | [docker.md](images/deeptutor/docker.md) |
 
 ## Setup
@@ -64,15 +62,14 @@ Each project directory contains only `build.yml` and `docker.md`. The build
 file uses Docker Buildx Bake's Compose format with one service named `image`:
 
 ```yaml
-x-upstream: vectorize-io/hindsight
+x-upstream: TencentCloud/Octop
 
 services:
    image:
-      image: ${DOCKERHUB_USERNAME:?Set DOCKERHUB_USERNAME}/hindsight:${VERSION:-check}
+      image: ${DOCKERHUB_USERNAME:?Set DOCKERHUB_USERNAME}/octop:${VERSION:-check}
       build:
          context: ${UPSTREAM_CONTEXT:?Set absolute UPSTREAM_CONTEXT}
-         dockerfile: docker/standalone/Dockerfile
-         target: standalone
+         dockerfile: docker/Dockerfile
          platforms:
             - linux/amd64
             - linux/arm64
