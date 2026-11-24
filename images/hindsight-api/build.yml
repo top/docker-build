@@ -1,0 +1,14 @@
+x-upstream: vectorize-io/hindsight
+x-ghcr-image: ghcr.io/vectorize-io/hindsight-api
+x-variant-preference: slim
+
+services:
+  image:
+    image: ${DOCKERHUB_USERNAME:?Set DOCKERHUB_USERNAME}/hindsight-api:${VERSION:-check}
+    build:
+      context: ${UPSTREAM_CONTEXT:?Set absolute UPSTREAM_CONTEXT}
+      dockerfile: docker/standalone/Dockerfile
+      target: api-only
+      platforms:
+        - linux/amd64
+        - linux/arm64

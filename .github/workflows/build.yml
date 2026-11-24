@@ -1,210 +1,134 @@
-name: Build multi-arch images
+name: Build & Sync Multi-Arch Images
 
 on:
   schedule:
+    # Hourly check: skips already-published versions in ~2s; syncs GHCR or builds on new release
     - cron: "20 * * * *"
   workflow_dispatch:
     inputs:
       project:
-        description: "Project directory under images, e.g. octop or deeptutor"
+        description: "Project directory under images/ (or 'all')"
         required: true
+        default: "all"
         type: string
       tag:
         description: "Upstream tag (empty = latest stable release)"
         required: false
         default: ""
         type: string
+      sync_description:
+        description: "Also sync docker.md description to Docker Hub"
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths:
-      - images/**
-      - scripts/check-update.sh
-      - .github/workflows/build.yml
+      - "images/*/docker.md"
 
 permissions:
   contents: read
 
 jobs:
-  discover:
-    name: Discover image projects
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.projects.outputs.matrix }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: Install yq
-        run: bash scripts/install-yq.sh
-      - name: Discover project names
-        id: projects
-        env:
-          PROJECT: ${{ inputs.project }}
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          VERSION: check
-        run: |
-          set -euo pipefail
-          : "${DOCKERHUB_USERNAME:?Missing Docker Hub username}"
-          configs=(images/*/build.yml)
-          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
-            if [[ ! "$PROJECT" =~ ^[a-z0-9][a-z0-9_-]*$ ]]; then
-              echo "::error::Enter a project directory name under images."
-              exit 1
-            fi
-            if [[ ! -f "images/$PROJECT/build.yml" ]]; then
-              echo "::error::No build.yml found for project '$PROJECT'."
-              exit 1
-            fi
-          fi
-          matrix="$(
-            declare -a repositories=()
-            declare -a project_ids=()
-            declare -a entries=()
-            for config in "${configs[@]}"; do
-              id="${config#images/}"
-              id="${id%/build.yml}"
-              [[ "$id" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || exit 1
-              [[ -f "$config" ]] || exit 1
-              image="$(yq -er '.services.image.image | envsubst(nu, ne, ff)' "$config")"
-              repository="${image%:*}"
-              for index in "${!repositories[@]}"; do
-                if [[ "$repository" == "${repositories[$index]}" ]]; then
-                  echo "::error::Projects '${project_ids[$index]}' and '$id' use the same Docker Hub repository '$repository'." >&2
-                  exit 1
-                fi
-              done
-              repositories+=("$repository")
-              project_ids+=("$id")
-              if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch || "$id" == "$PROJECT" ]]; then
-                entries+=("$(jq -cn --arg id "$id" '{id: $id}')")
-              fi
-            done
-            printf '%s\n' "${entries[@]}" | jq -sc '{include: .}'
-          )"
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-
   build:
-    name: Build ${{ matrix.id }}
+    name: Sync/Build Images
     if: github.event_name != 'push'
-    needs: discover
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
     concurrency:
-      group: image-${{ matrix.id }}
+      group: build-images-${{ inputs.project || 'all' }}
       cancel-in-progress: false
-    env:
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-      CONFIG: images/${{ matrix.id }}/build.yml
-      UPSTREAM_CONTEXT: ${{ github.workspace }}/upstream
     steps:
       - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
 
-      - name: Install yq
-        run: bash scripts/install-yq.sh
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Check upstream and published image
-        id: check
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REQUESTED_TAG: ${{ inputs.tag }}
-        run: bash scripts/check-update.sh "$CONFIG"
-
-      - name: Checkout upstream at tag
-        if: steps.check.outputs.should_build == 'true'
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ steps.check.outputs.upstream }}
-          ref: ${{ steps.check.outputs.tag }}
-          path: upstream
-          persist-credentials: false
-
-      - name: Copy project Dockerfile if present
-        if: steps.check.outputs.should_build == 'true' && hashFiles(format('images/{0}/Dockerfile', matrix.id)) != ''
-        run: cp "images/${{ matrix.id }}/Dockerfile" upstream/Dockerfile
-
-      - name: Configure DeerFlow frontend gateway
-        if: steps.check.outputs.should_build == 'true' && matrix.id == 'deer-flow-frontend'
-        run: |
-          printf '%s\n' \
-            'DEER_FLOW_INTERNAL_GATEWAY_BASE_URL=http://deer-flow-gateway:8001' \
-            > upstream/frontend/.env.production.local
-
-      - name: Free runner disk space
-        if: steps.check.outputs.should_build == 'true'
-        run: |
-          sudo -n rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc "$AGENT_TOOLSDIRECTORY"
-          df -h /
-
-      - name: Set up QEMU
-        if: steps.check.outputs.should_build == 'true'
-        uses: docker/setup-qemu-action@v3
-
       - name: Log in to Docker Hub
-        if: steps.check.outputs.should_build == 'true' || steps.check.outputs.repair_latest == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build and push
-        if: steps.check.outputs.should_build == 'true'
-        uses: docker/bake-action@v6
+      - name: Run 3-Tier Build & Sync
         env:
-          VERSION: ${{ steps.check.outputs.version }}
-        with:
-          source: .
-          files: images/${{ matrix.id }}/build.yml
-          targets: image
-          push: true
-          set: |
-            ${{ steps.check.outputs.tags }}
-            image.cache-from=type=gha,scope=${{ matrix.id }}
-            image.cache-to=type=gha,scope=${{ matrix.id }},mode=max
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TARGET="${{ inputs.project || 'all' }}"
+          TAG_ARG=""
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG_ARG="--tag ${{ inputs.tag }}"
+          fi
+          python3 build.py "$TARGET" --yes $TAG_ARG
 
-      - name: Repair latest without rebuilding
-        if: steps.check.outputs.repair_latest == 'true'
-        env:
-          IMAGE: ${{ steps.check.outputs.image }}
-          VERSION: ${{ steps.check.outputs.version }}
-        run: docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE:$VERSION"
-
-  description:
-    name: Sync ${{ matrix.id }} description
-    needs: discover
+  discover-docs:
+    name: Discover Changed Descriptions
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.sync_description)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
-    concurrency:
-      group: description-${{ matrix.id }}
-      cancel-in-progress: false
+    outputs:
+      matrix: ${{ steps.changed.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
         with:
-          persist-credentials: false
-      - name: Install yq
-        run: bash scripts/install-yq.sh
-      - name: Read Docker Hub repository
-        id: repository
+          fetch-depth: 0
+
+      - name: Find added/modified docker.md files
+        id: changed
         env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          CONFIG: images/${{ matrix.id }}/build.yml
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
+          PROJECT_INPUT: ${{ inputs.project }}
         run: |
-          set -euo pipefail
-          image="$(yq -er '.services.image.image | envsubst(nu, ne, ff)' "$CONFIG")"
-          echo "name=${image%:*}" >> "$GITHUB_OUTPUT"
+          python3 -c '
+          import glob, json, os, subprocess
+
+          event = os.environ["EVENT_NAME"]
+          projects = []
+
+          if event == "workflow_dispatch":
+              target = os.environ.get("PROJECT_INPUT", "all").strip()
+              for p in sorted(glob.glob("images/*/docker.md")):
+                  pid = os.path.basename(os.path.dirname(p))
+                  if target == "all" or pid == target:
+                      projects.append({"id": pid})
+          else:
+              before = os.environ.get("BEFORE_SHA", "")
+              current = os.environ.get("CURRENT_SHA", "HEAD")
+              if before and set(before) != {"0"}:
+                  cmd = ["git", "diff", "--name-only", "--diff-filter=AM", before, current, "--", "images/*/docker.md"]
+                  files = subprocess.check_output(cmd, text=True).splitlines()
+              else:
+                  files = sorted(glob.glob("images/*/docker.md"))
+
+              for f in sorted(set(files)):
+                  parts = f.split("/")
+                  if len(parts) == 3 and parts[0] == "images" and parts[2] == "docker.md":
+                      projects.append({"id": parts[1]})
+
+          matrix = json.dumps({"include": projects})
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"matrix={matrix}\n")
+          '
+
+  description:
+    name: Sync ${{ matrix.id }} Description
+    needs: discover-docs
+    if: needs.discover-docs.outputs.matrix != '{"include":[]}'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover-docs.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
       - name: Update Docker Hub description
         uses: peter-evans/dockerhub-description@v5
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_DESCRIPTION_TOKEN || secrets.DOCKERHUB_TOKEN }}
-          repository: ${{ steps.repository.outputs.name }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.id }}
           readme-filepath: images/${{ matrix.id }}/docker.md

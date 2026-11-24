@@ -1,4 +1,5 @@
 x-upstream: HKUDS/DeepTutor
+x-ghcr-image: ghcr.io/hkuds/deeptutor
 
 services:
   image:

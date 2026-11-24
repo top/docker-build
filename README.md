@@ -2,11 +2,34 @@
 
 Configuration-driven, unofficial multi-architecture builds for open-source AI and developer tools. One hourly workflow discovers `images/*/build.yml`; each project independently checks its latest stable GitHub Release and publishes to Docker Hub.
 
+## Local Build & Sync Wizard (`build.py`)
+
+To avoid exhausting GitHub Actions free-tier runner minutes (especially under QEMU ARM64 cross-compilation), you can run the interactive wizard locally on macOS, Linux, or Windows. Any machine with Docker installed can run it without configuration:
+
+```bash
+python3 build.py
+```
+
+### Features
+1. **Interactive Wizard (向导式交互)**: No CLI arguments required. Simply run the script, choose a project from the menu, and confirm.
+2. **Automatic Upstream Querying**: Queries the official upstream GitHub repository in real time to fetch the latest stable release tag.
+3. **GHCR Fast-Sync & Minimal Variant Priority**:
+   - Before compiling locally, the wizard searches GitHub Container Registry (`ghcr.io`) for pre-built multi-arch images.
+   - **Picks the smallest variant first**: Automatically prioritizes `alpine`, `slim`, and `minimal` tags if available.
+   - Directly re-tags and pushes multi-architecture manifests (`linux/amd64`, `linux/arm64`) to Docker Hub via `docker buildx imagetools create` within seconds without downloading layers or rebuilding locally.
+4. **Buildx Fallback**: If no pre-built image exists on GHCR, it automatically falls back to cloning source code and building multi-arch images locally with Docker Buildx.
+
+You can also run non-interactively if needed:
+```bash
+python3 build.py deeptutor --tag 1.7.4 --yes
+```
+
 ## Supported Images
 
 | Project Directory | Target Repository | Upstream | Overview |
 | --- | --- | --- | --- |
 | `octop` | `${DOCKERHUB_USERNAME}/octop` | [TencentCloud/Octop](https://github.com/TencentCloud/Octop) | [docker.md](images/octop/docker.md) |
+| `hindsight-api` | `${DOCKERHUB_USERNAME}/hindsight-api` | [vectorize-io/hindsight](https://github.com/vectorize-io/hindsight) | [docker.md](images/hindsight-api/docker.md) |
 | `deer-flow-gateway` | `${DOCKERHUB_USERNAME}/deer-flow-gateway` | [bytedance/deer-flow](https://github.com/bytedance/deer-flow) | [docker.md](images/deer-flow-gateway/docker.md) |
 | `deer-flow-frontend` | `${DOCKERHUB_USERNAME}/deer-flow-frontend` | [bytedance/deer-flow](https://github.com/bytedance/deer-flow) | [docker.md](images/deer-flow-frontend/docker.md) |
 | `deeptutor` | `${DOCKERHUB_USERNAME}/deeptutor` | [HKUDS/DeepTutor](https://github.com/HKUDS/DeepTutor) | [docker.md](images/deeptutor/docker.md) |
@@ -75,10 +98,10 @@ services:
             - linux/arm64
 ```
 
-`x-upstream` is the GitHub `owner/repository` for stable Releases. The shared
-script reads it using official [mikefarah/yq](https://github.com/mikefarah/yq)
-v4.45.4, with the Linux binary verified against a pinned SHA-256 checksum.
-Custom extensions are not expected in Bake's output.
+`x-upstream` is the GitHub `owner/repository` for stable Releases.
+Optionally, specify `x-ghcr-image` to point to pre-built GHCR packages (e.g. `ghcr.io/vectorize-io/hindsight`),
+and `x-variant-preference` (such as `slim` or `alpine`) to automatically prioritize lightweight variants.
+The builder reads these configurations automatically without external dependencies.
 
 The service's `image` is the sole image-name declaration; `build.platforms` is
 the sole platform list. The checker reads both from `bake --print`. Standard
