@@ -216,8 +216,8 @@ def fetch_upstream_latest_version(upstream):
 
 
 def normalize_version(tag):
-    """Strip leading prefixes (e.g. 'v1.7.4' -> '1.7.4')."""
-    m = re.search(r"(\d+(\.\d+)*(-[a-zA-Z0-9_.-]+)?)", tag)
+    """Strip leading non-digit prefixes (e.g. 'v1.7.4' -> '1.7.4', 'v1.0.3b7' -> '1.0.3b7')."""
+    m = re.search(r"(\d[a-zA-Z0-9_.-]*)", tag)
     return m.group(1) if m else tag.lstrip("v")
 
 
@@ -656,8 +656,16 @@ def main():
     projects = {p["project_id"]: p for p in discover_projects()}
 
     if args.project == "all":
+        failed = []
         for p in projects.values():
-            process_project(buildx_prefix, p, dockerhub_user, target_version=args.tag, auto_confirm=args.yes, force=args.force)
+            try:
+                process_project(buildx_prefix, p, dockerhub_user, target_version=args.tag, auto_confirm=args.yes, force=args.force)
+            except Exception as e:
+                log_error(f"Project '{p['project_id']}' failed: {e}")
+                failed.append(p["project_id"])
+        if failed:
+            log_error(f"Completed with failures in: {', '.join(failed)}")
+            sys.exit(1)
     elif args.project in projects:
         process_project(buildx_prefix, projects[args.project], dockerhub_user, target_version=args.tag, auto_confirm=args.yes, force=args.force)
     else:

@@ -5,7 +5,7 @@ services:
     image: ${DOCKERHUB_USERNAME:?Set DOCKERHUB_USERNAME}/octop:${VERSION:-check}
     build:
       context: ${UPSTREAM_CONTEXT:?Set absolute UPSTREAM_CONTEXT}
-      dockerfile: docker/Dockerfile
+      dockerfile: deploy/docker/Dockerfile
       platforms:
         - linux/amd64
         - linux/arm64
