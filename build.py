@@ -74,12 +74,52 @@ def safe_input(prompt=""):
         sys.exit(0)
 
 
+def _docker_daemon_reachable(docker_bin, env=None):
+    """Return True if `docker info` succeeds with the given environment."""
+    try:
+        subprocess.run(
+            [docker_bin, "info"],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=5,
+            check=True,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def auto_configure_docker_host(docker_bin):
+    """Ensure DOCKER_HOST points to a reachable Docker daemon (handles Colima/OrbStack/Docker Desktop on macOS)."""
+    if _docker_daemon_reachable(docker_bin):
+        return
+
+    home = os.path.expanduser("~")
+    candidates = [
+        os.path.join(home, ".colima", "default", "docker.sock"),
+        os.path.join(home, ".colima", "docker.sock"),
+        os.path.join(home, ".orbstack", "run", "docker.sock"),
+        os.path.join(home, ".docker", "run", "docker.sock"),
+    ]
+    for sock in candidates:
+        if os.path.exists(sock):
+            test_env = os.environ.copy()
+            test_env["DOCKER_HOST"] = f"unix://{sock}"
+            if _docker_daemon_reachable(docker_bin, env=test_env):
+                os.environ["DOCKER_HOST"] = f"unix://{sock}"
+                log_info(f"Auto-detected reachable Docker socket: {sock}")
+                return
+
+
 def get_docker_cmd():
     """Detect docker and buildx availability."""
     docker_bin = shutil.which("docker")
     if not docker_bin:
         log_error("Docker is not installed or not found in PATH.")
         sys.exit(1)
+
+    auto_configure_docker_host(docker_bin)
 
     buildx_prefix = [docker_bin, "buildx"]
     try:
@@ -156,6 +196,9 @@ def parse_build_yml(config_path):
     df_m = re.search(r"dockerfile:\s*(.+)$", content, re.M)
     dockerfile = df_m.group(1).strip() if df_m else "Dockerfile"
 
+    ctx_m = re.search(r"context:\s*\$\{UPSTREAM_CONTEXT[^}]*\}/(.+)$", content, re.M)
+    context_subpath = ctx_m.group(1).strip().strip("/") if ctx_m else ""
+
     target_m = re.search(r"target:\s*(.+)$", content, re.M)
     target = target_m.group(1).strip() if target_m else None
 
@@ -170,6 +213,7 @@ def parse_build_yml(config_path):
         "explicit_ghcr": explicit_ghcr,
         "variant_preference": variant_pref,
         "repo_name": repo_name,
+        "context_subpath": context_subpath,
         "dockerfile": dockerfile,
         "target": target,
         "platforms": platforms,
@@ -248,21 +292,20 @@ def is_already_published_on_dockerhub(target_repo, version, required_platforms):
 
 def get_candidate_ghcr_repositories(project):
     """Return candidate GHCR repositories for a project."""
-    candidates = []
-    if project.get("explicit_ghcr"):
-        candidates.append(project["explicit_ghcr"])
+    explicit = project.get("explicit_ghcr")
+    if explicit:
+        if explicit.lower() in ("none", "false", "disabled"):
+            return []
+        return [explicit]
 
     upstream = project["upstream"]
     owner, repo = upstream.split("/", 1)
     project_id = project["project_id"]
 
-    candidates.append(f"ghcr.io/{owner.lower()}/{repo.lower()}")
-    if project_id.lower() != repo.lower():
-        candidates.append(f"ghcr.io/{owner.lower()}/{project_id.lower()}")
-
-    # Deduplicate preserving order
-    seen = set()
-    return [c for c in candidates if not (c in seen or seen.add(c))]
+    if project_id.lower() == repo.lower():
+        return [f"ghcr.io/{owner.lower()}/{repo.lower()}"]
+    # Sub-component: only probe the sub-component's own name, never the main repo image
+    return [f"ghcr.io/{owner.lower()}/{project_id.lower()}"]
 
 
 def get_variant_candidate_tags(version, variant_pref=None):
@@ -317,6 +360,8 @@ def probe_ghcr_image(buildx_prefix, ghcr_repo, tag):
 def find_ghcr_image(buildx_prefix, project, version):
     """Search GHCR for suitable pre-built image with minimal variant preference."""
     candidate_repos = get_candidate_ghcr_repositories(project)
+    if not candidate_repos:
+        return None
     candidate_tags = get_variant_candidate_tags(version, project.get("variant_preference"))
 
     log_info("Probing GHCR for pre-built images (preferring minimal variants)...")
@@ -366,23 +411,67 @@ def sync_direct_imagetools(buildx_prefix, source_ref, target_repo, version, vari
         print(f"  {Colors.GREEN}✔ {t}{Colors.RESET}")
 
 
+def _builder_is_healthy(buildx_prefix, name):
+    """Check that a specific builder actually bootstraps to a running status without errors."""
+    try:
+        res = subprocess.run(
+            buildx_prefix + ["inspect", "--bootstrap", "--builder", name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+        out = res.stdout
+        if "Error:" in out or "Status:  running" not in out and "Status: running" not in out:
+            return False
+        docker_host = os.environ.get("DOCKER_HOST", "")
+        if docker_host and "/var/run/docker.sock" in out and docker_host not in out:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _get_active_docker_endpoint():
+    """Return DOCKER_HOST if set, otherwise the current docker context name (e.g. 'colima')."""
+    if os.environ.get("DOCKER_HOST"):
+        return os.environ["DOCKER_HOST"]
+    try:
+        res = subprocess.run(["docker", "context", "show"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        ctx = res.stdout.strip()
+        if ctx:
+            return ctx
+    except Exception:
+        pass
+    return None
+
+
 def ensure_buildx_builder(buildx_prefix):
-    """Ensure a container-based buildx builder instance is available."""
+    """Ensure a container-based buildx builder instance is available, active, and bound to the reachable daemon."""
     try:
         ls_res = subprocess.run(buildx_prefix + ["ls"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
         for line in ls_res.stdout.splitlines():
-            if "*" in line and "docker-container" in line:
-                return
+            if "docker-container" in line:
+                name = line.split()[0].rstrip("*")
+                if _builder_is_healthy(buildx_prefix, name):
+                    subprocess.run(buildx_prefix + ["use", name], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    return name
     except Exception:
         pass
 
-    builder_name = "multiarch-builder"
+    builder_name = f"multiarch-builder-{int(time.time()) % 10000}"
     log_info(f"Creating container-based Buildx builder ('{builder_name}')...")
+    create_cmd = buildx_prefix + ["create", "--name", builder_name, "--driver", "docker-container", "--use"]
+    endpoint = _get_active_docker_endpoint()
+    if endpoint:
+        create_cmd.append(endpoint)
     try:
-        subprocess.run(buildx_prefix + ["create", "--name", builder_name, "--driver", "docker-container", "--use"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-        subprocess.run(buildx_prefix + ["inspect", "--bootstrap"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        subprocess.run(create_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        subprocess.run(buildx_prefix + ["inspect", "--bootstrap", "--builder", builder_name], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        return builder_name
     except Exception as e:
         log_warn(f"Builder setup note: {e}")
+        return None
 
 
 def hybrid_assemble_build(buildx_prefix, project, git_tag, version, target_repo, ghcr_ref, existing_platforms, missing_platforms, variant):
@@ -392,7 +481,7 @@ def hybrid_assemble_build(buildx_prefix, project, git_tag, version, target_repo,
     natively (fast!), then combine both with imagetools create.
     """
     log_step(f"[Tier 2: Hybrid Assemble] Missing: {missing_platforms}, Sourcing: {existing_platforms}")
-    ensure_buildx_builder(buildx_prefix)
+    builder_name = ensure_buildx_builder(buildx_prefix)
 
     upstream = project["upstream"]
     missing_str = ",".join(missing_platforms)
@@ -403,10 +492,13 @@ def hybrid_assemble_build(buildx_prefix, project, git_tag, version, target_repo,
         log_info(f"Cloning {clone_url} at {git_tag}...")
         subprocess.run(["git", "clone", "--depth", "1", "--branch", git_tag, clone_url, tmpdir], check=True)
 
+        build_context = os.path.join(tmpdir, project["context_subpath"]) if project.get("context_subpath") else tmpdir
+        dockerfile_path = os.path.join(build_context, project["dockerfile"])
+
         # Apply project overrides
         custom_dockerfile = os.path.join(os.path.dirname(project["config_path"]), "Dockerfile")
         if os.path.exists(custom_dockerfile):
-            shutil.copy(custom_dockerfile, os.path.join(tmpdir, project["dockerfile"]))
+            shutil.copy(custom_dockerfile, dockerfile_path)
 
         if project["project_id"] == "deer-flow-frontend":
             env_file = os.path.join(tmpdir, "frontend", ".env.production.local")
@@ -418,11 +510,13 @@ def hybrid_assemble_build(buildx_prefix, project, git_tag, version, target_repo,
             "build",
             "--platform", missing_str,
             "-t", temp_single_tag,
-            "-f", os.path.join(tmpdir, project["dockerfile"]),
+            "-f", dockerfile_path,
         ]
+        if builder_name:
+            build_cmd.extend(["--builder", builder_name])
         if project.get("target"):
             build_cmd.extend(["--target", project["target"]])
-        build_cmd.extend(["--push", tmpdir])
+        build_cmd.extend(["--push", build_context])
 
         log_info(f"Building ONLY missing platform ({missing_str}) natively...")
         subprocess.run(build_cmd, check=True)
@@ -448,7 +542,7 @@ def hybrid_assemble_build(buildx_prefix, project, git_tag, version, target_repo,
 def full_fallback_build(buildx_prefix, project, git_tag, version, target_repo):
     """Tier 3: Build both platforms from source via Docker Buildx."""
     log_step(f"[Tier 3: Full Build Fallback] Building {project['project_id']} from source")
-    ensure_buildx_builder(buildx_prefix)
+    builder_name = ensure_buildx_builder(buildx_prefix)
 
     upstream = project["upstream"]
     platforms_str = ",".join(project["platforms"])
@@ -460,9 +554,12 @@ def full_fallback_build(buildx_prefix, project, git_tag, version, target_repo):
         log_info(f"Cloning {clone_url} at {git_tag}...")
         subprocess.run(["git", "clone", "--depth", "1", "--branch", git_tag, clone_url, tmpdir], check=True)
 
+        build_context = os.path.join(tmpdir, project["context_subpath"]) if project.get("context_subpath") else tmpdir
+        dockerfile_path = os.path.join(build_context, project["dockerfile"])
+
         custom_dockerfile = os.path.join(os.path.dirname(project["config_path"]), "Dockerfile")
         if os.path.exists(custom_dockerfile):
-            shutil.copy(custom_dockerfile, os.path.join(tmpdir, project["dockerfile"]))
+            shutil.copy(custom_dockerfile, dockerfile_path)
 
         if project["project_id"] == "deer-flow-frontend":
             env_file = os.path.join(tmpdir, "frontend", ".env.production.local")
@@ -475,11 +572,13 @@ def full_fallback_build(buildx_prefix, project, git_tag, version, target_repo):
             "--platform", platforms_str,
             "-t", target_v,
             "-t", target_latest,
-            "-f", os.path.join(tmpdir, project["dockerfile"]),
+            "-f", dockerfile_path,
         ]
+        if builder_name:
+            build_cmd.extend(["--builder", builder_name])
         if project.get("target"):
             build_cmd.extend(["--target", project["target"]])
-        build_cmd.extend(["--push", tmpdir])
+        build_cmd.extend(["--push", build_context])
 
         log_info(f"Building for {platforms_str}...")
         subprocess.run(build_cmd, check=True)
