@@ -30,6 +30,7 @@ python3 build.py deeptutor --tag 1.7.4 --yes
 | --- | --- | --- | --- |
 | `octop` | `${DOCKERHUB_USERNAME}/octop` | [TencentCloud/Octop](https://github.com/TencentCloud/Octop) | [docker.md](images/octop/docker.md) |
 | `hindsight-api` | `${DOCKERHUB_USERNAME}/hindsight-api` | [vectorize-io/hindsight](https://github.com/vectorize-io/hindsight) | [docker.md](images/hindsight-api/docker.md) |
+| `nanomuse` | `${DOCKERHUB_USERNAME}/nanomuse` | [nano-muse/nanoMuse](https://github.com/nano-muse/nanoMuse) | [docker.md](images/nanomuse/docker.md) |
 | `deer-flow-gateway` | `${DOCKERHUB_USERNAME}/deer-flow-gateway` | [bytedance/deer-flow](https://github.com/bytedance/deer-flow) | [docker.md](images/deer-flow-gateway/docker.md) |
 | `deer-flow-frontend` | `${DOCKERHUB_USERNAME}/deer-flow-frontend` | [bytedance/deer-flow](https://github.com/bytedance/deer-flow) | [docker.md](images/deer-flow-frontend/docker.md) |
 | `deeptutor` | `${DOCKERHUB_USERNAME}/deeptutor` | [HKUDS/DeepTutor](https://github.com/HKUDS/DeepTutor) | [docker.md](images/deeptutor/docker.md) |

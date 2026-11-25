@@ -1,0 +1,12 @@
+x-upstream: nano-muse/nanoMuse
+x-ghcr-image: ghcr.io/nano-muse/nanomuse
+
+services:
+  image:
+    image: ${DOCKERHUB_USERNAME:?Set DOCKERHUB_USERNAME}/nanomuse:${VERSION:-check}
+    build:
+      context: ${UPSTREAM_CONTEXT:?Set absolute UPSTREAM_CONTEXT}
+      dockerfile: Dockerfile
+      platforms:
+        - linux/amd64
+        - linux/arm64
