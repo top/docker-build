@@ -1,0 +1,12 @@
+x-upstream: https://git.zx2c4.com/cgit
+x-ghcr-image: none
+
+services:
+  image:
+    image: ${DOCKERHUB_USERNAME:?Set DOCKERHUB_USERNAME}/cgit:${VERSION:-check}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      platforms:
+        - linux/amd64
+        - linux/arm64

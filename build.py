@@ -196,6 +196,9 @@ def parse_build_yml(config_path):
     df_m = re.search(r"dockerfile:\s*(.+)$", content, re.M)
     dockerfile = df_m.group(1).strip() if df_m else "Dockerfile"
 
+    ctx_line = re.search(r"^(\s*)context:\s*(.+)$", content, re.M)
+    local_context = bool(ctx_line and "${UPSTREAM_CONTEXT" not in ctx_line.group(2))
+
     ctx_m = re.search(r"context:\s*\$\{UPSTREAM_CONTEXT[^}]*\}/(.+)$", content, re.M)
     context_subpath = ctx_m.group(1).strip().strip("/") if ctx_m else ""
 
@@ -213,6 +216,7 @@ def parse_build_yml(config_path):
         "explicit_ghcr": explicit_ghcr,
         "variant_preference": variant_pref,
         "repo_name": repo_name,
+        "local_context": local_context,
         "context_subpath": context_subpath,
         "dockerfile": dockerfile,
         "target": target,
@@ -232,7 +236,28 @@ def discover_projects():
 
 
 def fetch_upstream_latest_version(upstream):
-    """Query GitHub API for latest release or tag."""
+    """Query GitHub API (or git ls-remote for non-GitHub URLs) for latest release or tag."""
+    if upstream.startswith("http://") or upstream.startswith("https://"):
+        res = subprocess.run(
+            ["git", "ls-remote", "--tags", "--refs", upstream],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=15,
+            check=True,
+        )
+        tags = []
+        for line in res.stdout.splitlines():
+            if "\trefs/tags/" in line:
+                t = line.split("\trefs/tags/", 1)[1]
+                nums = [int(x) for x in re.findall(r"\d+", t)]
+                if nums:
+                    tags.append((nums, t))
+        if not tags:
+            raise RuntimeError(f"No tags found for {upstream}")
+        tags.sort(key=lambda x: x[0])
+        return tags[-1][1]
+
     headers = {
         "User-Agent": "Docker-Build-Wizard/1.0",
         "Accept": "application/vnd.github.v3+json",
@@ -550,22 +575,26 @@ def full_fallback_build(buildx_prefix, project, git_tag, version, target_repo):
     target_latest = f"{target_repo}:latest"
 
     with tempfile.TemporaryDirectory(prefix="docker-build-") as tmpdir:
-        clone_url = f"https://github.com/{upstream}.git"
-        log_info(f"Cloning {clone_url} at {git_tag}...")
-        subprocess.run(["git", "clone", "--depth", "1", "--branch", git_tag, clone_url, tmpdir], check=True)
+        if project.get("local_context"):
+            build_context = os.path.dirname(project["config_path"])
+            dockerfile_path = os.path.join(build_context, project["dockerfile"])
+        else:
+            clone_url = f"https://github.com/{upstream}.git"
+            log_info(f"Cloning {clone_url} at {git_tag}...")
+            subprocess.run(["git", "clone", "--depth", "1", "--branch", git_tag, clone_url, tmpdir], check=True)
 
-        build_context = os.path.join(tmpdir, project["context_subpath"]) if project.get("context_subpath") else tmpdir
-        dockerfile_path = os.path.join(build_context, project["dockerfile"])
+            build_context = os.path.join(tmpdir, project["context_subpath"]) if project.get("context_subpath") else tmpdir
+            dockerfile_path = os.path.join(build_context, project["dockerfile"])
 
-        custom_dockerfile = os.path.join(os.path.dirname(project["config_path"]), "Dockerfile")
-        if os.path.exists(custom_dockerfile):
-            shutil.copy(custom_dockerfile, dockerfile_path)
+            custom_dockerfile = os.path.join(os.path.dirname(project["config_path"]), "Dockerfile")
+            if os.path.exists(custom_dockerfile):
+                shutil.copy(custom_dockerfile, dockerfile_path)
 
-        if project["project_id"] == "deer-flow-frontend":
-            env_file = os.path.join(tmpdir, "frontend", ".env.production.local")
-            os.makedirs(os.path.dirname(env_file), exist_ok=True)
-            with open(env_file, "w") as f:
-                f.write("DEER_FLOW_INTERNAL_GATEWAY_BASE_URL=http://deer-flow-gateway:8001\n")
+            if project["project_id"] == "deer-flow-frontend":
+                env_file = os.path.join(tmpdir, "frontend", ".env.production.local")
+                os.makedirs(os.path.dirname(env_file), exist_ok=True)
+                with open(env_file, "w") as f:
+                    f.write("DEER_FLOW_INTERNAL_GATEWAY_BASE_URL=http://deer-flow-gateway:8001\n")
 
         build_cmd = buildx_prefix + [
             "build",
